@@ -21,6 +21,7 @@ class LatentDynExperiment(BaseLightningExperiment):
     compatible_datasets = dict(
         sim_aloha_dataset=SimAlohaDataset,
         real_aloha_dataset=RealAlohaDataset,
+        orcahand_dataset=RealAlohaDataset,
     )
 
     def _build_dataset(self, split: str) -> Optional[torch.utils.data.Dataset]:

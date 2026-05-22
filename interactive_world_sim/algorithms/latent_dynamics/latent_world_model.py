@@ -52,6 +52,7 @@ class LatentWorldModel(BasePytorchAlgo):
         self.clip_noise = self.cfg.diffusion.clip_noise
         self.guidance_scale = self.cfg.guidance_scale
         self.n_tokens = self.cfg.n_frames
+        self.context_length = int(cfg.context_length if "context_length" in cfg else 1)
         self.mask_prev_action = (
             cfg.mask_prev_action if "mask_prev_action" in cfg else False
         )
@@ -367,35 +368,23 @@ class LatentWorldModel(BasePytorchAlgo):
             # compute predicted latent
             z_seq = z_gt
         elif self.training_stage in [2]:
-            # compute predicted latent
-            z_0 = z_gt[:, 0]
-            z_seq_ls = []
-            z_last = z_0.clone()
-            horizon = z_gt.shape[1]
-
-            for i in range(1, action.shape[1], horizon):
-                action_chunk = action[:, i : i + horizon]  # (B, horizon, A)
-                init_action_size = action_chunk.shape[1]
-                if init_action_size < horizon:
-                    # pad the last action to match the horizon
-                    action_chunk = F.pad(
-                        action_chunk,
-                        (0, 0, 0, horizon - action_chunk.shape[1]),
-                        mode="replicate",
-                    )
-                z_seq = self.dynamics_forward(
-                    z_last[:, None],
-                    action_chunk,
-                )  # (B, T, latent_dim)
-                z_seq = z_seq[:, :init_action_size]
-                z_seq_ls.append(z_seq)
-                z_last = z_seq[:, -1].clone()
-            z_seq = torch.cat(z_seq_ls, 1)
-            z_seq = torch.cat([z_0.unsqueeze(1), z_seq], 1)  # (B, T, latent_dim)
-            val_loss = F.mse_loss(z_seq, z_gt, reduction="none")  # (B, T, latent_dim)
-            if torch.isnan(val_loss).any():
-                print("NaN in val_loss")
-            val_loss = val_loss[:, 1:].mean()
+            context_length = min(self.context_length, z_gt.shape[1])
+            if context_length >= z_gt.shape[1]:
+                z_seq = z_gt
+                val_loss = torch.zeros((), device=z_gt.device, dtype=z_gt.dtype)
+            else:
+                z_context = z_gt[:, :context_length]
+                z_future = self.dynamics_forward(z_context, action)
+                z_future = z_future[:, : z_gt.shape[1] - context_length]
+                z_seq = torch.cat([z_context, z_future], 1)
+                val_loss = F.mse_loss(
+                    z_seq[:, context_length:],
+                    z_gt[:, context_length:],
+                    reduction="none",
+                )
+                if torch.isnan(val_loss).any():
+                    print("NaN in val_loss")
+                val_loss = val_loss.mean()
             self.log(f"{namespace}/dyn_loss", val_loss)
             if "dyn_loss" not in self.validation_metrics:
                 self.validation_metrics["dyn_loss"] = []
@@ -407,7 +396,11 @@ class LatentWorldModel(BasePytorchAlgo):
         # render images
         if self.val_render:
             xs_pred = render_img_cm(
-                self, z_seq, xs.shape[-1], self.normalizer, num_views=self.num_views
+                self,
+                z_seq,
+                (xs.shape[-2], xs.shape[-1]),
+                self.normalizer,
+                num_views=self.num_views,
             )
             xs_pred = rearrange(xs_pred, "(b t) c h w -> t b c h w", b=obs.shape[0])
             xs = torch.cat([batch["obs"][k] for k in self.obs_keys], dim=2)
@@ -617,6 +610,7 @@ class LatentWorldModel(BasePytorchAlgo):
                     external_cond=action,
                 )
 
+            loss_start_idx = min(self.context_length, z.shape[0] - 1)
             if self.last_frame_loss_only:
                 loss_s = F.mse_loss(
                     pred_s[-1:], noisy_z_s[-1:].detach(), reduction="none"
@@ -637,12 +631,16 @@ class LatentWorldModel(BasePytorchAlgo):
                 loss = loss.mean()
             else:
                 loss_s = F.mse_loss(pred_s, noisy_z_s.detach(), reduction="none")
+                loss_s = loss_s[loss_start_idx:]
+                weights_t = weights_t[loss_start_idx:]
                 weights_t = weights_t.view(
                     *weights_t.shape, *((1,) * (loss_s.ndim - 2))
                 )
                 loss_s = loss_s * weights_t
                 if self.dyn_infer_steps > 1:
                     loss_u = F.mse_loss(pred_u, z.detach(), reduction="none")
+                    loss_u = loss_u[loss_start_idx:]
+                    weights_s = weights_s[loss_start_idx:]
                     weights_s = weights_s.view(
                         *weights_s.shape, *((1,) * (loss_s.ndim - 2))
                     )

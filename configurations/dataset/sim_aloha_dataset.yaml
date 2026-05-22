@@ -5,6 +5,7 @@ dataset_dir: data/sim_aloha/transfer_cube_0301
 horizon: 16
 val_horizon: 16
 aug_mode: none
+context_length: 1
 skip_frame: 1
 pad_after: 7
 pad_before: 1
@@ -13,6 +14,8 @@ seed: 42
 skip_idx: 4
 use_cache: true
 resolution: 128
+image_height: 128
+image_width: 128
 obs_keys: [top_pov]
 low_dim_keys: []
 goal_sample: intermediate

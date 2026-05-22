@@ -1,6 +1,7 @@
 import concurrent.futures
 import copy
 import glob
+import json
 import multiprocessing
 import os
 import shutil
@@ -38,6 +39,16 @@ from interactive_world_sim.utils.sampler import SequenceSampler
 from .base_dataset import BaseImageDataset
 
 register_codecs()
+
+
+def _crop_resize_or_resize_to_shape(imgs: np.ndarray, h: int, w: int) -> np.ndarray:
+    processed = []
+    for img in imgs:
+        if img.shape[0] >= h and img.shape[1] >= w:
+            img = center_crop(img, (h, w))
+        resized = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+        processed.append(resized)
+    return np.stack(processed, axis=0)
 
 
 # convert raw hdf5 data to replay buffer, which is used for diffusion policy training
@@ -86,11 +97,15 @@ def _convert_real_to_dp_replay(
     mask_data_dict: dict = dict()
     depth_data_dict: dict = dict()
 
-    from yixuan_utilities.kinematics_helper import KinHelper
+    if ctrl_mode == "direct":
+        kin_helper = None
+        joint_pos_to_action_primitive = None
+    else:
+        from yixuan_utilities.kinematics_helper import KinHelper
 
-    from interactive_world_sim.utils.action_utils import joint_pos_to_action_primitive
+        from interactive_world_sim.utils.action_utils import joint_pos_to_action_primitive
 
-    kin_helper = KinHelper("trossen_vx300s")
+        kin_helper = KinHelper("trossen_vx300s")
 
     for epi_idx in tqdm(episodes_idx, desc="Loading episodes"):
         dataset_path = os.path.join(dataset_dir, f"episode_{epi_idx}.hdf5")
@@ -104,25 +119,28 @@ def _convert_real_to_dp_replay(
             # save lowdim data to lowedim_data_dict
             if "action" not in lowdim_data_dict:
                 lowdim_data_dict["action"] = list()
-            action_ls = []
-            for t in range(file["obs"]["full_joint_pos"].shape[0]):
-                joint_pos = file["obs"]["joint_pos"][t]
-                num_rob = joint_pos.shape[0] // 7
-                for r_i in range(num_rob):
-                    joint_pos[r_i * 7 + 6] = MASTER_GRIPPER_JOINT_UNNORMALIZE_FN(
-                        PUPPET_GRIPPER_JOINT_NORMALIZE_FN(joint_pos[r_i * 7 + 6])
+            if ctrl_mode == "direct":
+                action_data = file["action"][()].astype(np.float32)
+            else:
+                action_ls = []
+                for t in range(file["obs"]["full_joint_pos"].shape[0]):
+                    joint_pos = file["obs"]["joint_pos"][t]
+                    num_rob = joint_pos.shape[0] // 7
+                    for r_i in range(num_rob):
+                        joint_pos[r_i * 7 + 6] = MASTER_GRIPPER_JOINT_UNNORMALIZE_FN(
+                            PUPPET_GRIPPER_JOINT_NORMALIZE_FN(joint_pos[r_i * 7 + 6])
+                        )
+                    action = joint_pos_to_action_primitive(
+                        joint_pos=joint_pos,
+                        ctrl_mode=ctrl_mode,
+                        base_pose_in_world=file["obs"]["world_t_robot_base"][t],
+                        kin_helper=kin_helper,
                     )
-                action = joint_pos_to_action_primitive(
-                    joint_pos=joint_pos,
-                    ctrl_mode=ctrl_mode,
-                    base_pose_in_world=file["obs"]["world_t_robot_base"][t],
-                    kin_helper=kin_helper,
-                )
-                action_ls.append(action)
-            action_data = np.concatenate(action_ls)
-            # preventing overgrasping
-            if ctrl_mode == "single_grasp":
-                action_data[:, -1] = file["action"][:, -1]
+                    action_ls.append(action)
+                action_data = np.concatenate(action_ls)
+                # preventing overgrasping
+                if ctrl_mode == "single_grasp":
+                    action_data[:, -1] = file["action"][:, -1]
             lowdim_data_dict["action"].append(action_data)
 
             for key in rgb_keys:
@@ -131,12 +149,7 @@ def _convert_real_to_dp_replay(
                 imgs = file["obs"]["images"][key][()]
                 shape = tuple(shape_meta["obs"][key]["shape"])
                 c, h, w = shape
-                crop_imgs = [center_crop(img, (h, w)) for img in imgs]
-                resize_imgs = [
-                    cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
-                    for img in crop_imgs
-                ]
-                imgs = np.stack(resize_imgs, axis=0)
+                imgs = _crop_resize_or_resize_to_shape(imgs, h, w)
                 assert imgs[0].shape == (h, w, c)
                 rgb_data_dict[key].append(imgs)
 
@@ -146,12 +159,7 @@ def _convert_real_to_dp_replay(
                 imgs = file["obs"]["images"][key][()]
                 shape = tuple(shape_meta["obs"][key]["shape"])
                 c, h, w = shape
-                crop_imgs = [center_crop(img, (h, w)) for img in imgs]
-                resize_imgs = [
-                    cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
-                    for img in crop_imgs
-                ]
-                imgs = np.stack(resize_imgs, axis=0)[..., None]
+                imgs = _crop_resize_or_resize_to_shape(imgs, h, w)[..., None]
                 imgs = np.clip(imgs, 0, 1000).astype(np.uint16)
                 assert imgs[0].shape == (h, w, c)
                 depth_data_dict[key].append(imgs)
@@ -343,6 +351,61 @@ def _convert_real_to_dp_replay(
     return replay_buffer
 
 
+def _filter_sampler_to_sample_index(
+    sampler: SequenceSampler, sample_index_path: str
+) -> None:
+    with open(sample_index_path, "r") as f:
+        sample_index = json.load(f)
+    if not isinstance(sample_index, list):
+        raise ValueError(f"{sample_index_path} must contain a list of sample entries")
+
+    episode_ends = np.asarray(sampler.episode_ends)
+    episode_starts = np.concatenate([[0], episode_ends[:-1]])
+    indices_by_start = {}
+    for row in sampler.indices:
+        buffer_start_idx, _, sample_start_idx, _ = row
+        if sample_start_idx != 0:
+            continue
+        indices_by_start.setdefault(int(buffer_start_idx), row)
+
+    filtered_indices = []
+    for sample_i, sample in enumerate(sample_index):
+        episode_id = int(sample["episode_id"])
+        frame_id = int(sample["frame_id"])
+        if episode_id < 0 or episode_id >= len(episode_starts):
+            raise ValueError(
+                f"{sample_index_path} sample {sample_i} references episode_id "
+                f"{episode_id}, but there are {len(episode_starts)} episodes"
+            )
+        if frame_id < 0 or frame_id >= episode_ends[episode_id] - episode_starts[episode_id]:
+            raise ValueError(
+                f"{sample_index_path} sample {sample_i} has invalid frame_id "
+                f"{frame_id} for episode {episode_id}"
+            )
+        buffer_start_idx = int(episode_starts[episode_id] + frame_id)
+        row = indices_by_start.get(buffer_start_idx)
+        if row is None:
+            raise ValueError(
+                f"Could not map {sample_index_path} sample {sample_i} to a sequence "
+                f"start. episode_id={episode_id}, frame_id={frame_id}. "
+                "Increase dataset.pad_after if samples near episode ends should be padded."
+            )
+        filtered_indices.append(row)
+
+    sampler.indices = np.asarray(filtered_indices, dtype=np.int64).reshape(-1, 4)
+
+
+def _apply_sample_index_if_present(
+    sampler: SequenceSampler, dataset_dir: str, sample_index_file: str
+) -> bool:
+    sample_index_path = os.path.join(dataset_dir, sample_index_file)
+    if not os.path.exists(sample_index_path):
+        return False
+    _filter_sampler_to_sample_index(sampler, sample_index_path)
+    print(f"Loaded {len(sampler.indices)} sample starts from {sample_index_path}")
+    return True
+
+
 def load_replay_buffer(
     dataset_dir: str,
     use_cache: bool,
@@ -351,9 +414,10 @@ def load_replay_buffer(
 ) -> ReplayBuffer:
     replay_buffer = None
     if use_cache:
-        res = shape_meta["obs"]["camera_1_color"]["shape"][-1]
-        if res != 128:
-            cache_info_str = f"_res_{res}"
+        shape = tuple(shape_meta["obs"]["camera_1_color"]["shape"])
+        h, w = int(shape[-2]), int(shape[-1])
+        if (h, w) != (128, 128):
+            cache_info_str = f"_res_{h}x{w}"
         else:
             cache_info_str = ""
         cache_zarr_path = os.path.join(dataset_dir, f"cache{cache_info_str}.zarr.zip")
@@ -407,6 +471,10 @@ class RealAlohaDataset(BaseImageDataset):
         pad_after = cfg.pad_after
         use_cache = cfg.use_cache
         self.action_mode = cfg.action_mode
+        self.sample_index_file = (
+            cfg.sample_index_file if "sample_index_file" in cfg else "sample_index.json"
+        )
+        self.uses_sample_index = False
         self.val_horizon = (
             cfg.val_horizon * cfg.skip_frame if "val_horizon" in cfg else horizon
         )
@@ -466,6 +534,9 @@ class RealAlohaDataset(BaseImageDataset):
             skip_frame=cfg.skip_frame,
             keys_to_keep_intermediate=["action"],
         )
+        self.uses_sample_index = _apply_sample_index_if_present(
+            self.sampler, train_dir, self.sample_index_file
+        )
 
         self.shape_meta = shape_meta
         self.rgb_keys = rgb_keys
@@ -522,11 +593,10 @@ class RealAlohaDataset(BaseImageDataset):
         return normalizer
 
     def __len__(self) -> int:
-        if self.is_val:
+        if self.is_val and not self.uses_sample_index:
             # the number of episodes in the validation set
             return self.replay_buffer.n_episodes // self.skip_idx
-        else:
-            return len(self.sampler)
+        return len(self.sampler)
 
     def get_validation_dataset(self) -> "BaseImageDataset":
         """Return a validation dataset."""
@@ -549,6 +619,9 @@ class RealAlohaDataset(BaseImageDataset):
             goal_sample=self.goal_sample,
             skip_frame=self.skip_frame,
             keys_to_keep_intermediate=["action"],
+        )
+        val_set.uses_sample_index = _apply_sample_index_if_present(
+            val_set.sampler, val_dir, self.sample_index_file
         )
         val_set.train_mask = val_mask
         return val_set
@@ -631,7 +704,7 @@ class RealAlohaDataset(BaseImageDataset):
         return data
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        if self.is_val:
+        if self.is_val and not self.uses_sample_index:
             epi_idx = idx * self.skip_idx
             epi_start = (
                 self.replay_buffer.episode_ends[epi_idx - 1] if epi_idx > 0 else 0

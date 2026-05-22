@@ -1,5 +1,7 @@
 from typing import Any
 
+from collections.abc import Sequence
+
 import cv2
 import numpy as np
 import torch
@@ -8,6 +10,13 @@ from tqdm import tqdm
 
 from interactive_world_sim.utils.draw_utils import concat_img_h, concat_img_v
 from interactive_world_sim.utils.normalizer import LinearNormalizer
+
+def _resolution_to_hw(resolution: int | Sequence[int]) -> tuple[int, int]:
+    if isinstance(resolution, int):
+        return resolution, resolution
+    if len(resolution) != 2:
+        raise ValueError(f"resolution must be an int or (height, width), got {resolution}")
+    return int(resolution[0]), int(resolution[1])
 
 
 @torch.no_grad()
@@ -36,7 +45,8 @@ def render_img(
     schedules = np.arange(algo.sampling_timesteps, -1, -1)
     schedules = torch.from_numpy(schedules).to(algo.device)
 
-    xs_pred = torch.randn(latent.shape[0], 3 * num_views, resolution, resolution)
+    height, width = _resolution_to_hw(resolution)
+    xs_pred = torch.randn(latent.shape[0], 3 * num_views, height, width)
     xs_pred = xs_pred.to(device=algo.device, dtype=algo.dtype)
     batch_size = 50
     for i in range(algo.sampling_timesteps):
@@ -58,7 +68,7 @@ def render_img(
         curr_obs_key = algo.obs_keys[c_i]
         xs_pred_ls.append(normalizer[curr_obs_key].unnormalize(curr_xs_pred))
     xs_pred = torch.cat(xs_pred_ls, dim=1)  # (T, B * V, 3, H, W)
-    assert xs_pred.shape == (latent.shape[0], 3 * num_views, resolution, resolution)
+    assert xs_pred.shape == (latent.shape[0], 3 * num_views, height, width)
     xs_pred = xs_pred.clamp(0, 1)  # Clamp to [-1, 1]
     return xs_pred
 
@@ -87,7 +97,8 @@ def render_img_cm(
     """
     assert latent.ndim in [2, 4], "Latent state must have shape (B, D) or (B, C, H, W)"
 
-    xs_pred = torch.randn(latent.shape[0], 3 * num_views, resolution, resolution)
+    height, width = _resolution_to_hw(resolution)
+    xs_pred = torch.randn(latent.shape[0], 3 * num_views, height, width)
     xs_pred = xs_pred.to(device=algo.device, dtype=algo.dtype)
     curr_obs_key = algo.obs_keys[0]
     if hasattr(algo, "dec_infer_steps"):
@@ -122,7 +133,7 @@ def render_img_cm(
         curr_obs_key = algo.obs_keys[c_i]
         xs_pred_ls.append(normalizer[curr_obs_key].unnormalize(curr_xs_pred))
     xs_pred = torch.cat(xs_pred_ls, dim=1)  # (T, B * V, 3, H, W)
-    assert xs_pred.shape == (latent.shape[0], 3 * num_views, resolution, resolution)
+    assert xs_pred.shape == (latent.shape[0], 3 * num_views, height, width)
     xs_pred = xs_pred.clamp(0, 1)  # Clamp to [-1, 1]
     return xs_pred
 

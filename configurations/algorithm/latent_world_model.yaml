@@ -13,13 +13,15 @@ num_components: 1
 obs_keys: ${dataset.obs_keys}
 x_shape:
   - ${eval:'3 * len(${dataset.obs_keys})'}
-  - ${dataset.resolution}
-  - ${dataset.resolution}
+  - ${dataset.image_height}
+  - ${dataset.image_width}
 norm_scale: 6.0
 num_latent_downsample: 2
 num_views: ${eval:'len(${dataset.obs_keys})'}
 num_latent_channel: ${eval:'4 * ${algorithm.num_views}'}
-latent_resolution: ${eval:'${dataset.resolution} // int(2 ** ${algorithm.num_latent_downsample})'}
+latent_height: ${eval:'${dataset.image_height} // int(2 ** ${algorithm.num_latent_downsample})'}
+latent_width: ${eval:'${dataset.image_width} // int(2 ** ${algorithm.num_latent_downsample})'}
+latent_resolution: ${algorithm.latent_height}
 training_stage: 1
 load_ae: ${eval:'None'}
 dtype: ${torch:float}
@@ -34,13 +36,14 @@ scheduling_matrix: autoregressive
 uncertainty_scale: 1.0
 guidance_scale: 1.0
 n_frames: ${dataset.horizon}
+context_length: ${dataset.context_length}
 dyn_infer_steps: 1
 dec_infer_steps: 3
 last_frame_loss_only: False
 prev_frame_noise_scale: 0.1
 robust_latent: False
 
-delta: ${eval:'0.00054 * ${algorithm.num_latent_channel} * ${algorithm.latent_resolution} * ${algorithm.latent_resolution}'}
+delta: ${eval:'0.00054 * ${algorithm.num_latent_channel} * ${algorithm.latent_height} * ${algorithm.latent_width}'}
 
 sampling_strategy: uniform
 sampling_strategy_params: []
@@ -102,7 +105,9 @@ diffusion:
   resblock_updown: True
   use_scale_shift_norm: True
   num_components: ${algorithm.num_components}
-  image_size: ${dataset.resolution}
+  image_size:
+    - ${dataset.image_height}
+    - ${dataset.image_width}
   stabilization_level: 15
 
 metrics:
