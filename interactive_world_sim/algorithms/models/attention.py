@@ -60,9 +60,9 @@ class Attention(nn.Module):
 
         if device_properties.major >= 8 and device_properties.minor == 0:
             print_once(
-                "A100 GPU detected, using flash attention if input tensor is on cuda"
+                "A100 GPU detected, using flash attention with math fallback if input tensor is on cuda"
             )
-            self.cuda_backends = [SDPBackend.FLASH_ATTENTION]
+            self.cuda_backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.MATH]
         else:
             print_once(
                 "Non-A100 GPU detected, using math or mem efficient attention if \
