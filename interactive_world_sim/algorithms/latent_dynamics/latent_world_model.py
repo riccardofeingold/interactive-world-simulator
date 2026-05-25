@@ -751,14 +751,30 @@ class LatentWorldModel(BasePytorchAlgo):
         xs = torch.cat(xs_ls, 1)
 
         if self.logger:
-            log_video(
-                xs_pred,
-                xs.clone(),
-                step=None if namespace == "test" else self.global_step,
-                namespace=namespace + "_vis",
-                context_frames=0,
-                logger=self.logger.experiment,
-            )
+            step = None if namespace == "test" else self.global_step
+            if self.num_views > 1:
+                channels_per_view = xs_pred.shape[2] // self.num_views
+                for view_i, obs_key in enumerate(self.obs_keys):
+                    start = view_i * channels_per_view
+                    end = start + channels_per_view
+                    log_video(
+                        xs_pred[:, :, start:end],
+                        xs[:, :, start:end].clone(),
+                        step=step,
+                        namespace=namespace + "_vis",
+                        prefix=obs_key,
+                        context_frames=0,
+                        logger=self.logger.experiment,
+                    )
+            else:
+                log_video(
+                    xs_pred,
+                    xs.clone(),
+                    step=step,
+                    namespace=namespace + "_vis",
+                    context_frames=0,
+                    logger=self.logger.experiment,
+                )
 
         metric_dict = get_validation_metrics_for_videos(
             xs_pred,
