@@ -10,6 +10,7 @@ from .exp_latent_dyn import LatentDynExperiment
 # each key has to be a yaml file under '[project_root]/configurations/experiment' without .yaml suffix # noqa
 exp_registry = dict(
     exp_latent_dyn=LatentDynExperiment,
+    orcahand_stage_1=LatentDynExperiment,
 )
 
 
