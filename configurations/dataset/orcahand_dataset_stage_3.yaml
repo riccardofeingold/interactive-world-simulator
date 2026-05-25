@@ -1,0 +1,9 @@
+defaults:
+  - orcahand_dataset
+  - _self_
+
+horizon: 1
+val_horizon: 200
+n_frames: ${dataset.horizon}
+context_length: 1
+pad_after: 7

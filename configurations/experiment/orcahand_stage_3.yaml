@@ -1,0 +1,45 @@
+defaults:
+  - base_pytorch
+
+tasks: [training]
+
+training:
+  lr: 8e-5
+  precision: 32-true
+  batch_size: 16
+  max_epochs: -1
+  max_steps: 1000005
+  log_every_n_steps: 100
+  data:
+    num_workers: 4
+    shuffle: true
+  optim:
+    gradient_clip_val: 1.0
+    accumulate_grad_batches: 1
+  checkpointing:
+    save_top_k: -1
+    every_n_train_steps: 10000
+    every_n_epochs: null
+    train_time_interval: null
+    enable_version_counter: false
+
+validation:
+  val_every_n_step: 30000
+  val_every_n_epoch: null
+  batch_size: 2
+  limit_batch: 1
+  inference_mode: true
+  data:
+    num_workers: 4
+    shuffle: false
+
+test:
+  limit_batch: 1
+  batch_size: 8
+  data:
+    num_workers: 16
+    shuffle: false
+
+logging:
+  metrics:
+    - fvd

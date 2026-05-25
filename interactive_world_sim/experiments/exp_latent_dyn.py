@@ -16,12 +16,15 @@ class LatentDynExperiment(BaseLightningExperiment):
 
     compatible_algorithms = dict(
         latent_world_model=LatentWorldModel,
+        orcahand_latent_world_model_stage_2=LatentWorldModel,
+        orcahand_latent_world_model_stage_3=LatentWorldModel,
     )
 
     compatible_datasets = dict(
         sim_aloha_dataset=SimAlohaDataset,
         real_aloha_dataset=RealAlohaDataset,
         orcahand_dataset=RealAlohaDataset,
+        orcahand_dataset_stage_3=RealAlohaDataset,
     )
 
     def _build_dataset(self, split: str) -> Optional[torch.utils.data.Dataset]:

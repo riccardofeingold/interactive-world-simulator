@@ -1,0 +1,12 @@
+defaults:
+  - latent_world_model
+  - _self_
+
+training_stage: 3
+load_ae: ???
+action_dim: 23
+
+sampling_strategy: terminal_only
+noise_scheduler:
+  loss_weighting: uniform
+  snr_clip: 5.0

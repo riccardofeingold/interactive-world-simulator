@@ -11,6 +11,8 @@ from .exp_latent_dyn import LatentDynExperiment
 exp_registry = dict(
     exp_latent_dyn=LatentDynExperiment,
     orcahand_stage_1=LatentDynExperiment,
+    orcahand_stage_2=LatentDynExperiment,
+    orcahand_stage_3=LatentDynExperiment,
 )
 
 

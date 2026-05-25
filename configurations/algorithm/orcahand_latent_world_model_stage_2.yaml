@@ -1,0 +1,12 @@
+defaults:
+  - latent_world_model
+  - _self_
+
+training_stage: 2
+load_ae: /data/interactive-world-simulator/checkpoints/epoch_5_step_200000.ckpt
+action_dim: 23
+
+sampling_strategy: terminal_only
+noise_scheduler:
+  loss_weighting: uniform
+  snr_clip: 5.0
