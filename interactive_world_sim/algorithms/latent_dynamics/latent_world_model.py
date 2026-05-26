@@ -776,13 +776,36 @@ class LatentWorldModel(BasePytorchAlgo):
                     logger=self.logger.experiment,
                 )
 
-        metric_dict = get_validation_metrics_for_videos(
-            xs_pred,
-            xs,
-            lpips_model=self.validation_lpips_model,
-            fid_model=self.validation_fid_model,
-            fvd_model=self.validation_fvd_model,
-        )
+        if self.num_views > 1:
+            channels_per_view = xs_pred.shape[2] // self.num_views
+            metric_dict = {}
+            mean_metric_values = {}
+            for view_i, obs_key in enumerate(self.obs_keys):
+                start = view_i * channels_per_view
+                end = start + channels_per_view
+                view_metric_dict = get_validation_metrics_for_videos(
+                    xs_pred[:, :, start:end],
+                    xs[:, :, start:end],
+                    lpips_model=self.validation_lpips_model,
+                    fid_model=self.validation_fid_model,
+                    fvd_model=self.validation_fvd_model,
+                )
+                for key, value in view_metric_dict.items():
+                    metric_dict[f"{obs_key}/{key}"] = value
+                    mean_metric_values.setdefault(key, []).append(value)
+            for key, values in mean_metric_values.items():
+                if torch.is_tensor(values[0]):
+                    metric_dict[key] = torch.stack([v.float() for v in values]).mean()
+                else:
+                    metric_dict[key] = sum(values) / len(values)
+        else:
+            metric_dict = get_validation_metrics_for_videos(
+                xs_pred,
+                xs,
+                lpips_model=self.validation_lpips_model,
+                fid_model=self.validation_fid_model,
+                fvd_model=self.validation_fvd_model,
+            )
         self.log_dict(
             {f"{namespace}/{k}": v for k, v in metric_dict.items()},
             on_step=False,
